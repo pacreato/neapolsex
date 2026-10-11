@@ -47,13 +47,27 @@ async function mono(p, opt = {}) {
   if (!r.ok) throw new Error(JSON.stringify(j));
   return j;
 }
+// Якщо вебхук Monobank не дійшов — самі перепитуємо статус рахунку, щоб оплачена бронь не втрачалась
+async function reconcile(v, key, force) {
+  if (v.paid || !v.invoiceId || !ENV("MONO_TOKEN")) return v;
+  if (!force && (await redis("SET", "nl:chk:" + v.id, "1", "EX", "15", "NX")) === null) return v; // не частіше, ніж раз на 15 с
+  try {
+    const st = await mono("/api/merchant/invoice/status?invoiceId=" + encodeURIComponent(v.invoiceId));
+    if (st.status === "success") { const cur = await getJ(key); if (!cur) return null; cur.paid = true; await setJ(key, cur); return cur; }
+    if (["expired", "reversed"].includes(st.status)) { await redis("DEL", key); return null; }
+  } catch (e) { console.error("reconcile:", e.message); }
+  return v;
+}
 async function allBookings() {
   const keys = await redis("KEYS", "nl:b:*");
   const vals = keys.length ? await redis("MGET", ...keys) : [];
   const out = [];
   for (let i = 0; i < keys.length; i++) {
-    const v = vals[i] ? JSON.parse(vals[i]) : null; if (!v) continue;
-    if (!v.paid && Date.now() - v.created > HOLD_MS + 60000) { await redis("DEL", keys[i]); continue; } // прибрати прострочені
+    let v = vals[i] ? JSON.parse(vals[i]) : null; if (!v) continue;
+    const stale = !v.paid && Date.now() - v.created > HOLD_MS + 60000;
+    v = await reconcile(v, keys[i], stale);                     // для прострочених — обов'язкова перевірка перед видаленням
+    if (!v) continue;
+    if (!v.paid && stale) { await redis("DEL", keys[i]); continue; }
     out.push(v);
   }
   return out;
@@ -141,8 +155,8 @@ module.exports = async (req, res) => {
       if (bk && ENV("MONO_TOKEN")) {
         try { // не довіряємо тілу вебхука — перепитуємо статус у Monobank
           const st = await mono("/api/merchant/invoice/status?invoiceId=" + encodeURIComponent(body.invoiceId));
-          if (st.status === "success") { bk.paid = true; await setJ("nl:b:" + bk.id, bk); }
-          else if (["failure", "expired", "reversed"].includes(st.status) && !bk.paid) await redis("DEL", "nl:b:" + bk.id);
+          if (st.status === "success") { const cur = await getJ("nl:b:" + bk.id); if (cur) { cur.paid = true; await setJ("nl:b:" + bk.id, cur); } }
+          else if (["expired", "reversed"].includes(st.status) && !bk.paid) await redis("DEL", "nl:b:" + bk.id);
         } catch (e) { console.error("Webhook:", e.message); }
       }
       return send(res, 200, { ok: true });
