@@ -86,6 +86,7 @@ module.exports = async (req, res) => {
     }
     if (m === "POST" && p === "/site") {
       if (!isAdmin(req)) return send(res, 401, { error: "Потрібен вхід адміна" });
+      try {
       const old = await getSite(), site = { news: body.news || [], comps: body.comps || [], photos: [] };
       if (body.prices) site.prices = body.prices;
       for (const ph of body.photos || []) {
@@ -101,6 +102,7 @@ module.exports = async (req, res) => {
       for (const o of old.photos || []) if (!keep.has(o.src)) { const k = String(o.src).match(/^\/api\/photo\/(\d+)$/); if (k) await redis("DEL", "nl:p:" + k[1]); }
       await setJ("nl:site", site);
       return send(res, 200, { site });
+      } catch (e) { console.error("site:", e.message); return send(res, 500, { error: "Не вдалося зберегти: " + e.message }); }
     }
     if (m === "POST" && p === "/bookings") {
       const site = await getSite(), b = body;
