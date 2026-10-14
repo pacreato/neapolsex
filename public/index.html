@@ -142,7 +142,7 @@ async function init(){await load();const q=new URLSearchParams(location.search);
   history.replaceState(null,"","/");
   if(r&&r.id)afterPay(r);else toast("Дякуємо! Щойно оплата підтвердиться, бронь з'явиться як зайнята.")}
  setInterval(()=>{if(!document.hidden&&!document.querySelector("#app input:focus,#app textarea:focus"))load()},30000)}
-async function saveSite(){try{const x=await api("POST","/api/site",S);S=Object.assign(S,x.site)}catch(e){toast("Не вдалося зберегти: "+e.message);await load();return}render()}
+async function saveSite(){try{const x=await api("POST","/api/site",S);S=Object.assign(S,x.site)}catch(e){toast("Не вдалося зберегти: "+e.message);await load();return false}render();return true}
 async function afterPay(r){
  waOverlay('<h3 style="margin-top:0">Перевіряємо оплату…</h3><p>Зачекайте кілька секунд: після підтвердження відкриється WhatsApp із готовим повідомленням.</p>');
  let paid=false;
@@ -205,8 +205,19 @@ async function book(){const r={name:$("#bn").value.trim(),phone:$("#bp").value.t
  finishBooking()}
 function addNews(){const t=$("#nt").value.trim();if(!t)return;S.news.unshift({id:Date.now(),title:t,text:$("#nx").value,warn:$("#nw").checked,date:today()});saveSite()}
 function addComp(){const f=$("#cf").value,t=$("#ct").value||f;if(!f)return;S.comps.push({from:f,to:t,name:$("#cn").value});saveSite()}
-function shrink(file){return new Promise(res=>{const r=new FileReader();r.onload=()=>{const i=new Image();i.onload=()=>{const k=Math.min(1,900/Math.max(i.width,i.height)),c=document.createElement("canvas");c.width=i.width*k;c.height=i.height*k;c.getContext("2d").drawImage(i,0,0,c.width,c.height);let q=.72,u=c.toDataURL("image/jpeg",q);while(u.length>600000&&q>.4){q-=.08;u=c.toDataURL("image/jpeg",q)}res(u)};i.src=r.result};r.readAsDataURL(file)})}
-async function addPhotos(fs){for(const f of fs)S.photos.unshift({id:Date.now()+Math.random(),src:await shrink(f)});saveSite()}
+// фото з телефона: зменшуємо до 1280 px і ~300 КБ, надсилаємо по одному (ліміт Vercel на запит — 4,5 МБ)
+function shrink(file){return new Promise(res=>{const u=URL.createObjectURL(file),i=new Image();
+ i.onload=()=>{try{const w=i.naturalWidth,h=i.naturalHeight,k=Math.min(1,1280/Math.max(w,h)),c=document.createElement("canvas");c.width=Math.max(1,Math.round(w*k));c.height=Math.max(1,Math.round(h*k));
+  c.getContext("2d").drawImage(i,0,0,c.width,c.height);let q=.78,d=c.toDataURL("image/jpeg",q);while(d.length>380000&&q>.4){q-=.07;d=c.toDataURL("image/jpeg",q)}
+  res(d.length>900000?null:d)}catch(e){res(null)}URL.revokeObjectURL(u)};
+ i.onerror=()=>{URL.revokeObjectURL(u);res(null)};i.src=u})}
+async function addPhotos(fs){const list=Array.from(fs||[]);let ok=0;
+ for(let n=0;n<list.length;n++){toast("Завантажуємо фото "+(n+1)+" з "+list.length+"…");
+  const src=await shrink(list[n]);
+  if(!src){toast("Не вдалося обробити фото «"+(list[n].name||n+1)+"» (формат або розмір)");continue}
+  S.photos.unshift({id:Date.now()+Math.random(),src});
+  if(!(await saveSite()))break;ok++}
+ if(ok)toast("Додано фото: "+ok)}
 
 
 let PAY_URL="";
