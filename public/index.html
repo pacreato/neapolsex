@@ -105,6 +105,14 @@ nav button{display:flex;align-items:center;gap:10px;text-align:left;justify-cont
 // ===== ФОТО: сюди вставляються фото (data-URL або посилання). Ключі 1..15 = номери фото =====
 const IMG={"1": "images/foto_1.jpg", "2": "images/foto_2.jpg", "6": "images/foto_6.jpg", "7": "images/foto_7.jpg", "8": "images/foto_8.jpg", "9": "images/foto_9.jpg", "10": "images/foto_10.jpg", "11": "images/foto_11.jpg", "12": "images/foto_12.jpg", "13": "images/foto_13.jpg", "14": "images/foto_14.jpg", "15": "images/foto_15.jpg", "logoT": "images/logo.webp"};
 const WA="380960888807";
+// Автоматичне повідомлення у WhatsApp: r={name,phone,sector,date,days,amount,pct}; paid=true — після успішної оплати
+function waText(r,paid){const n=+r.days||1,e=addDays(r.date,n);
+ return (paid===true?"✅ Оплату отримано — бронювання Neapol Lake":"Нова заявка на бронювання — Neapol Lake")+"\n"+
+ "Ім'я: "+r.name+"\nТелефон: "+r.phone+"\nСектор: "+r.sector+"\nЗаїзд: "+fmtD(r.date)+"\nВиїзд: "+fmtD(e)+" ("+n+" "+dword(n)+")\n"+
+ (paid===true?"Сплачено ":"До оплати ")+(r.pct||50)+"%: "+r.amount+" грн"+(paid===true?"":paid==="wait"?"\n(оплату внесено, очікує підтвердження банку)":"\n(оплата ще не внесена, чекаю реквізити)")}
+const waLink=(r,paid)=>"https://wa.me/"+WA+"?text="+encodeURIComponent(waText(r,paid));
+function waOverlay(html){let d=document.getElementById("lb");if(!d){d=document.createElement("div");d.id="lb";d.style.cursor="default";document.body.appendChild(d)}
+ d.innerHTML='<div class="card" style="width:min(400px,92%);margin:0">'+html+'</div>';return d}
 const TABS=[["home","Головна"],["prices","Ціни"],["sectors","Сектори"],["rules","Правила"],["photos","Фото"],["news","Новини"]];
 let tab="home",admin=false,db=null,S={news:[],photos:[],comps:[]},B={};
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -118,11 +126,26 @@ async function api(m,u,b){const r=await fetch(u,{method:m,headers:Object.assign(
 async function load(){try{const x=await api("GET","/api/state");S=Object.assign({news:[],photos:[],comps:[]},x.site);PAYON=x.payment!==false;B={};x.bookings.forEach(b=>B[b.sector+"_"+b.date]=b);
  if(admin&&!x.admin){TOKEN="";sessionStorage.removeItem("t")}admin=!!x.admin}catch(e){}render()}
 async function init(){await load();const q=new URLSearchParams(location.search);
- if(q.get("paid")){toast("Дякуємо! Щойно оплата підтвердиться, бронь з'явиться як зайнята.");history.replaceState(null,"","/")}
+ if(q.get("paid")){let r=null;
+  if(q.get("id")&&q.get("n")&&q.get("ph"))r={id:q.get("id"),name:q.get("n"),phone:q.get("ph"),sector:q.get("s"),date:q.get("d"),days:+q.get("k")||1,amount:q.get("a"),pct:+q.get("p")||50};
+  else try{r=JSON.parse(localStorage.getItem("nl_last")||"null")}catch(e){}
+  history.replaceState(null,"","/");
+  if(r&&r.id)afterPay(r);else toast("Дякуємо! Щойно оплата підтвердиться, бронь з'явиться як зайнята.")}
  setInterval(()=>{if(!document.hidden&&!document.querySelector("#app input:focus,#app textarea:focus"))load()},30000)}
 async function saveSite(){try{const x=await api("POST","/api/site",S);S=Object.assign(S,x.site)}catch(e){toast("Не вдалося зберегти: "+e.message);await load();return}render()}
+async function afterPay(r){
+ waOverlay('<h3 style="margin-top:0">Перевіряємо оплату…</h3><p>Зачекайте кілька секунд: після підтвердження відкриється WhatsApp із готовим повідомленням.</p>');
+ let paid=false;
+ for(let i=0;i<8&&!paid;i++){try{paid=(await api("GET","/api/paystatus?id="+encodeURIComponent(r.id))).paid}catch(e){}if(!paid)await new Promise(z=>setTimeout(z,2500))}
+ try{localStorage.removeItem("nl_last")}catch(e){}
+ load();
+ if(paid){const u=waLink(r,true);
+  waOverlay('<h3 style="margin-top:0">✅ Оплату отримано</h3><p>Сектор '+esc(r.sector)+', заїзд '+esc(fmtD(r.date))+'. Відкриваємо WhatsApp із готовим повідомленням адміністратору…</p><div class="btns"><a class="btn" href="'+u+'">Відкрити WhatsApp</a><button class="btn g" onclick="document.getElementById(\'lb\').remove()">Закрити</button></div>');
+  setTimeout(()=>{location.href=u},1200)}
+ else waOverlay('<h3 style="margin-top:0">Оплата ще обробляється</h3><p>Якщо ви вже сплатили, бронь підтвердиться за кілька хвилин. Можна одразу написати адміністратору у WhatsApp.</p><div class="btns"><a class="btn" href="'+waLink(r,"wait")+'">Написати у WhatsApp</a><button class="btn g" onclick="document.getElementById(\'lb\').remove()">Закрити</button></div>')}
 async function addBooking(r){try{const x=await api("POST","/api/bookings",Object.assign({},r,{admin,pct:pct()}));B[r.sector+"_"+r.date]=r;
- if(x.pageUrl){PAY_URL=x.pageUrl;setTimeout(()=>{location.href=x.pageUrl},900)}return true}catch(e){BERR=e.message;return false}}
+ if(x.pageUrl){PAY_URL=x.pageUrl;if(!admin){try{localStorage.setItem("nl_last",JSON.stringify(Object.assign({},r,{id:r.sector+"_"+r.date,pct:pct()})))}catch(e){}}setTimeout(()=>{location.href=x.pageUrl},900)}
+ else if(!admin){PAY_URL="";setTimeout(()=>{location.href=waLink(Object.assign({},r,{pct:pct()}),false)},900)}return true}catch(e){BERR=e.message;return false}}
 const compOn=d=>S.comps.find(c=>d>=c.from&&d<=c.to);
 
 const NI={home:"🏠",prices:"💰",sectors:"📍",rules:"📜",photos:"📷",news:"📰"};
@@ -166,8 +189,8 @@ async function book(){const r={name:$("#bn").value.trim(),phone:$("#bp").value.t
  if(!admin&&!$("#ba").checked){m.innerHTML='<div class="msg busy">Підтвердіть, що ознайомились з умовами бронювання.</div>';return}
  r.amount=admin?0:payAmt();r.paid=admin;if(!(await addBooking(r))){BOOKMSG=`<div class="msg busy">${esc(BERR||"Цей сектор на цю дату вже заброньовано.")}</div>`;$("#bok").innerHTML=BOOKMSG;calRefresh();return}
  if(admin){BOOKMSG='<div class="msg">✅ Бронь додано.</div>';finishBooking();return}
- const t=`Нова заявка на бронювання%0AІм'я: ${encodeURIComponent(r.name)}%0AТелефон: ${encodeURIComponent(r.phone)}%0AСектор: ${r.sector}%0AЗаїзд: ${fmtD(r.date)}%0AВиїзд: ${fmtD(addDays(r.date,r.days))} (${r.days} ${dword(r.days)})%0AОплата ${pct()}%25: ${r.amount} грн`;
- BOOKMSG=`<div class="msg">✅ Заявку збережено: сектор ${r.sector}, заїзд ${fmtD(r.date)}, виїзд ${fmtD(addDays(r.date,r.days))} (${r.days} ${dword(r.days)}). Щоб бронь діяла, внесіть оплату ${r.amount} грн.${PAY_URL?"":" Реквізити для оплати надішле адміністратор у WhatsApp."}<div class="btns" style="margin-top:8px">${PAY_URL?`<a class="btn" href="${PAY_URL}" target="_blank" rel="noopener">Сплатити (Monobank)</a>`:""}<a class="btn" href="https://wa.me/${WA}?text=${t}" target="_blank" rel="noopener">Підтвердити у WhatsApp</a></div><div style="margin-top:8px;font-size:14px">Або зателефонуйте: <a href="tel:+380960888807">096 088 88 07</a></div></div>`;
+ const wl=waLink(Object.assign({},r,{pct:pct()}),false);
+ BOOKMSG=`<div class="msg">✅ Заявку збережено: сектор ${r.sector}, заїзд ${fmtD(r.date)}, виїзд ${fmtD(addDays(r.date,r.days))} (${r.days} ${dword(r.days)}). Щоб бронь діяла, внесіть оплату ${r.amount} грн. ${PAY_URL?"Зараз відкриється сторінка оплати, а після неї — WhatsApp із готовим повідомленням.":"Зараз відкриється WhatsApp із готовим повідомленням, реквізити надішле адміністратор."}<div class="btns" style="margin-top:8px">${PAY_URL?`<a class="btn" href="${PAY_URL}" target="_blank" rel="noopener">Сплатити (Monobank)</a>`:""}<a class="btn" href="${wl}">Відкрити WhatsApp</a></div><div style="margin-top:8px;font-size:14px">Або зателефонуйте: <a href="tel:+380960888807">096 088 88 07</a></div></div>`;
  finishBooking()}
 function addNews(){const t=$("#nt").value.trim();if(!t)return;S.news.unshift({id:Date.now(),title:t,text:$("#nx").value,warn:$("#nw").checked,date:today()});saveSite()}
 function addComp(){const f=$("#cf").value,t=$("#ct").value||f;if(!f)return;S.comps.push({from:f,to:t,name:$("#cn").value});saveSite()}
