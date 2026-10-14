@@ -140,7 +140,7 @@ module.exports = async (req, res) => {
           const inv = await mono("/api/merchant/invoice/create", { method: "POST", body: JSON.stringify({
             amount: bk.amount * 100, ccy: 980, validity: HOLD_MS / 1000,
             merchantPaymInfo: { reference: id, destination: `Оплата ${pct}% — сектор ${sector}, ${date}, ${days} діб` },
-            redirectUrl: BASE() + "/?paid=1", webHookUrl: BASE() + "/api/mono/webhook" }) });
+            redirectUrl: BASE() + "/?" + new URLSearchParams({ paid: "1", id, s: String(sector), d: date, k: String(days), a: String(bk.amount), p: String(pct), n: name, ph: phone }).toString(), webHookUrl: BASE() + "/api/mono/webhook" }) });
           bk.invoiceId = inv.invoiceId; await setJ(key, bk);
           return send(res, 200, { ok: true, pageUrl: inv.pageUrl });
         } catch (e) {
@@ -149,6 +149,13 @@ module.exports = async (req, res) => {
         }
       }
       return send(res, 200, { ok: true });
+    }
+    if (m === "GET" && p === "/paystatus") { // публічно: лише чи оплачено (без персональних даних) — для автоматичного переходу у WhatsApp
+      const id = new URL(req.url, "http://x").searchParams.get("id") || "";
+      if (!/^\d+_\d{4}-\d{2}-\d{2}$/.test(id)) return send(res, 400, { error: "Невірний id" });
+      const key = "nl:b:" + id; let v = await getJ(key);
+      if (v && !v.paid) v = await reconcile(v, key, true);
+      return send(res, 200, { paid: !!(v && v.paid) });
     }
     if (m === "POST" && p === "/mono/webhook") {
       const bk = (await allBookings()).find(x => x.invoiceId && x.invoiceId === body.invoiceId);
