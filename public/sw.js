@@ -1,5 +1,5 @@
 // Service worker: сайт відкривається швидко й працює без мережі (дані — з останнього візиту)
-const V = "nl-v2", CORE = ["./", "index.html", "manifest.webmanifest"];
+const V = "nl-v4", CORE = ["./", "index.html", "manifest.webmanifest"];
 self.addEventListener("install", e => e.waitUntil(caches.open(V).then(c => c.addAll(CORE)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(
   caches.keys().then(k => Promise.all(k.filter(x => x !== V).map(x => caches.delete(x)))).then(() => self.clients.claim())));
