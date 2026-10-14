@@ -35,7 +35,13 @@ const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 const overlapsWith = (list, sector, date, days, selfId) => { const end = addDays(date, days - 1);
   return list.filter(b => b.id !== selfId && b.sector === sector && taken(b) && b.date <= end && addDays(b.date, (b.days || 1) - 1) >= date); };
-const getSite = async () => (await getJ("nl:site")) || { news: [], photos: [], comps: [] };
+// фото віддаємо за однорівневою адресою /api/photo?id=N (старі адреси /api/photo/N перетворюються на нову)
+const normSrc = s => { const k = String(s || "").match(/^\/api\/photo(?:\/|\?id=)(\d+)$/); return k ? "/api/photo?id=" + k[1] : null; };
+const getSite = async () => {
+  const s = (await getJ("nl:site")) || { news: [], photos: [], comps: [] };
+  s.photos = (s.photos || []).map(x => ({ ...x, src: normSrc(x.src) || x.src }));
+  return s;
+};
 const compOn = (site, d) => (site.comps || []).find(c => d >= c.from && d <= c.to);
 const payAmt = (site, pct) => { // 50% або 100% від першого рядка «Ціни на сезон» (доба на секторі)
   const r = site.prices && site.prices.season && site.prices.season[0];
@@ -100,8 +106,9 @@ module.exports = async (req, res) => {
       return send(res, 401, { error: "Невірний пароль" });
     }
     let mm;
-    if (m === "GET" && (mm = p.match(/^\/photo\/(\d+)$/))) {
-      const v = await redis("GET", "nl:p:" + mm[1]);
+    if (m === "GET" && (p === "/photo" || (mm = p.match(/^\/photo\/(\d+)$/)))) {
+      const pid = mm ? mm[1] : (new URL(req.url, "http://x").searchParams.get("id") || "").replace(/\D/g, "");
+      const v = pid ? await redis("GET", "nl:p:" + pid) : null;
       if (!v) { res.status(404).end("Not found"); return; }
       res.setHeader("Content-Type", "image/jpeg"); res.setHeader("Cache-Control", "public, max-age=86400");
       res.status(200).send(Buffer.from(v, "base64")); return;
@@ -116,12 +123,12 @@ module.exports = async (req, res) => {
         if (/^data:image\/(jpeg|png|webp);base64,/.test(src)) {
           const id = String(ph.id).replace(/\D/g, "") || String(Date.now());
           await redis("SET", "nl:p:" + id, src.split(",")[1]);
-          src = "/api/photo/" + id;
-        } else if (!/^\/api\/photo\/\d+$/.test(src)) continue;
+          src = "/api/photo?id=" + id;
+        } else { const n = normSrc(src); if (!n) continue; src = n; }
         site.photos.push({ id: ph.id, src });
       }
       const keep = new Set(site.photos.map(x => x.src));
-      for (const o of old.photos || []) if (!keep.has(o.src)) { const k = String(o.src).match(/^\/api\/photo\/(\d+)$/); if (k) await redis("DEL", "nl:p:" + k[1]); }
+      for (const o of old.photos || []) if (!keep.has(o.src)) { const k = normSrc(o.src); if (k) await redis("DEL", "nl:p:" + k.split("=")[1]); }
       await setJ("nl:site", site);
       return send(res, 200, { site });
       } catch (e) { console.error("site:", e.message); return send(res, 500, { error: "Не вдалося зберегти: " + e.message }); }
