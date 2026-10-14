@@ -72,6 +72,14 @@ async function allBookings() {
   }
   return out;
 }
+// адмін може видалити будь-яку бронь: оплачену, неоплачену, минулу, на дати змагань
+async function cancelBooking(key) {
+  let ex = null; try { ex = await getJ(key); } catch {}
+  await redis("DEL", key);
+  if (ex && !ex.paid && ex.invoiceId && ENV("MONO_TOKEN")) { // щоб клієнт не оплатив уже видалену бронь
+    try { await mono("/api/merchant/invoice/remove", { method: "POST", body: JSON.stringify({ invoiceId: ex.invoiceId }) }); } catch (e) { console.error("invoice remove:", e.message); }
+  }
+}
 const send = (res, code, obj) => { res.setHeader("Cache-Control", "no-store"); res.status(code).json(obj); };
 
 module.exports = async (req, res) => {
@@ -168,17 +176,19 @@ module.exports = async (req, res) => {
       }
       return send(res, 200, { ok: true });
     }
+    if (m === "POST" && (p === "/cancel" || p === "/markpaid")) { // однорівневі адреси (без /bookings/<id>): працюють і там, де Vercel не віддає вкладені шляхи
+      if (!isAdmin(req)) return send(res, 401, { error: "Потрібен вхід адміна" });
+      const id = String(body.id || "");
+      if (!/^\d+_\d{4}-\d{2}-\d{2}$/.test(id)) return send(res, 400, { error: "Невірний id" });
+      const key = "nl:b:" + id;
+      if (p === "/cancel") await cancelBooking(key);
+      else { const v = await getJ(key); if (v) { v.paid = true; await setJ(key, v); } }
+      return send(res, 200, { ok: true });
+    }
     if ((mm = p.match(/^\/bookings\/(\d+_\d{4}-\d{2}-\d{2})(\/paid)?$/))) {
       if (!isAdmin(req)) return send(res, 401, { error: "Потрібен вхід адміна" });
       const key = "nl:b:" + mm[1];
-      if (m === "DELETE") { // адмін може видалити будь-яку бронь: оплачену, неоплачену, минулу, на дати змагань
-        let ex = null; try { ex = await getJ(key); } catch {}
-        await redis("DEL", key);
-        if (ex && !ex.paid && ex.invoiceId && ENV("MONO_TOKEN")) { // щоб клієнт не оплатив уже видалену бронь
-          try { await mono("/api/merchant/invoice/remove", { method: "POST", body: JSON.stringify({ invoiceId: ex.invoiceId }) }); } catch (e) { console.error("invoice remove:", e.message); }
-        }
-        return send(res, 200, { ok: true });
-      }
+      if (m === "DELETE") { await cancelBooking(key); return send(res, 200, { ok: true }); }
       if (m === "PATCH" && mm[2]) { const v = await getJ(key); if (v) { v.paid = true; await setJ(key, v); } return send(res, 200, { ok: true }); }
     }
     return send(res, 404, { error: "Не знайдено" });
